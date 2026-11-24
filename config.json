@@ -1,0 +1,39 @@
+{
+  "user_url": "https://t.10jqka.com.cn/lgt/user_page/?user_code=1179giyc4jr06d6785e69e#/",
+  "fetch": {
+    "mode": "json",
+    "api_url": "https://community.touzime.com/user_center/open/api/content/v2/get_by_uid",
+    "json_body": {
+      "user_code": "1179giyc4jr06d6785e69e",
+      "page": 1,
+      "size": 10
+    },
+    "headers": {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "Referer": "https://t.10jqka.com.cn/lgt/user_page/",
+      "Cookie": ""
+    },
+    "list_path": "data.contents",
+    "fields": {
+      "id": "info.id",
+      "title": "abstract.content",
+      "time": "info.ctime",
+      "url": "info.pc_jump_url"
+    },
+    "url_template": "",
+    "html": {
+      "item_selector": "div.post-item",
+      "link_selector": "a",
+      "link_attr": "href",
+      "title_selector": "a",
+      "time_selector": "span.time",
+      "time_attr": "title",
+      "base_url": "https://t.10jqka.com.cn"
+    }
+  },
+  "notify": {
+    "lookback_minutes_on_cold_start": 10,
+    "max_posts_per_message": 8,
+    "alert_on_failure": true
+  }
+}
