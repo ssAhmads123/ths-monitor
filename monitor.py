@@ -26,7 +26,6 @@ class Post:
     title: str
     url: str
     ts: float
-    body: str = ""
 
 
 def load_config() -> dict:
@@ -165,25 +164,6 @@ def fetch_posts_html(cfg: dict) -> list[Post]:
     return [p for p in out if p.pid]
 
 
-def fetch_detail_body(cfg: dict, post: Post) -> str:
-    """The list API caps abstract at 2200 chars; the detail API has the whole post."""
-    d = cfg["fetch"].get("detail") or {}
-    if not d.get("api_url"):
-        return post.title
-    m = re.search(d.get("slug_regex", r"contentId_([0-9a-z]+)"), post.url or "")
-    if not m:
-        return post.title
-    try:
-        resp = requests.get(d["api_url"], params={"contentId": m.group(1)},
-                            headers=d.get("headers", {}), timeout=20)
-        resp.raise_for_status()
-        body = clean_text(str(dig(resp.json(), d.get("content_path", "data.postData.content")) or ""))
-        return body or post.title
-    except Exception as exc:  # noqa: BLE001 - an unreadable detail must not block the alert
-        print(f"detail fetch failed for {post.pid}: {exc!r}", file=sys.stderr)
-        return post.title
-
-
 def fetch_posts(cfg: dict) -> list[Post]:
     mode = cfg["fetch"].get("mode", "json")
     posts = fetch_posts_json(cfg) if mode == "json" else fetch_posts_html(cfg)
@@ -271,7 +251,7 @@ def render(posts: list[Post], limit: int) -> str:
     blocks = []
     for p in shown:
         when = datetime.fromtimestamp(p.ts).strftime("%m-%d %H:%M") if p.ts else ""
-        text = p.body or p.title or "(无正文)"
+        text = p.title or "(无正文)"
         names = " · ".join(stock_names(text)) or "无标的"
         blocks.append(f"**同花顺新帖提醒 · {when} · {names}**\n\n{text}")
     out = "\n\n".join(blocks)
@@ -318,8 +298,6 @@ def main() -> int:
 
     if fresh:
         limit = cfg["notify"].get("max_posts_per_message", 8)
-        for p in fresh[:limit]:
-            p.body = fetch_detail_body(cfg, p)
         send_wecom_full(render(fresh, limit))
         print(f"pushed {len(fresh)} new post(s)")
     else:
