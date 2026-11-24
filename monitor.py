@@ -231,12 +231,13 @@ def summarize(text: str) -> dict:
 
 
 def render(posts: list[Post], limit: int) -> str:
-    lines = [f"**同花顺新帖提醒 · {len(posts)} 篇**"]
-    for p in posts[:limit]:
+    shown = posts[:limit]
+    lines = [f"**同花顺新帖提醒 · {len(shown)} 篇**"]
+    for p in shown:
         when = datetime.fromtimestamp(p.ts).strftime("%m-%d %H:%M") if p.ts else ""
         s = summarize(p.title)
         names = " · ".join(name for _, name in s["stocks"]) or "无标的"
-        lines.append(f'- <a href="{p.url}">**{when}** {names}</a>')
+        lines.append(f'- **{when}** {names}')
         detail = [f"{name}：{clip(frag, 40)}" for name, frag in s["lines"]]
         if s["op"] and not any(s["op"][:16] in d for d in detail):
             detail.append(clip(s["op"], 50))

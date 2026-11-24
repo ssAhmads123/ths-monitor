@@ -33,7 +33,7 @@
   },
   "notify": {
     "lookback_minutes_on_cold_start": 10,
-    "max_posts_per_message": 8,
+    "max_posts_per_message": 1,
     "alert_on_failure": true
   }
 }
