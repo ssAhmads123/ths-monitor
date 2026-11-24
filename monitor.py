@@ -191,13 +191,48 @@ def send_wecom(markdown: str) -> None:
         raise RuntimeError(f"wecom push failed: {data}")
 
 
+STOCK_TAG = re.compile(r"\$([^$]*?)\((\d{6})\)\$")
+OP_TAG = re.compile(r"(今日操作|收盘总结|竞价|午盘更新)[：:]?\s*([^。]{4,46})")
+SHORT_POST_CHARS = 120
+
+
+def summarize(text: str) -> dict:
+    """Pull the mentioned tickers plus the author's own wording about each.
+
+    Verbatim fragments only: keyword-to-signal labelling proved unreliable on this
+    corpus (negations and hypotheticals read backwards), so the reader judges.
+    """
+    stocks = [(code, name) for name, code in STOCK_TAG.findall(text)]
+    lines = []
+    op = ""
+    m = OP_TAG.search(text)
+    if m:
+        op = m.group(0).strip()
+    if len(STOCK_TAG.sub("", text).strip()) <= SHORT_POST_CHARS:
+        for hit in STOCK_TAG.finditer(text):
+            tail = re.split(r"\$", text[hit.end(): hit.end() + 60])[0]
+            tail = re.split(r"[。！]", tail)[0].strip(" ，,、…")
+            if tail:
+                lines.append((hit.group(1) or hit.group(2), tail))
+    return {"stocks": stocks, "lines": lines, "op": op}
+
+
 def render(posts: list[Post], limit: int) -> str:
     lines = [f"**同花顺新帖提醒 · {len(posts)} 篇**"]
     for p in posts[:limit]:
         when = datetime.fromtimestamp(p.ts).strftime("%m-%d %H:%M") if p.ts else ""
-        text = p.title or "(无标题)"
-        title = text if len(text) <= 80 else text[:80] + "…"
-        lines.append(f"- <a href=\"{p.url}\">{title}</a>  <font color=\"comment\">{when}</font>")
+        s = summarize(p.title)
+        names = " · ".join(name for _, name in s["stocks"]) or "无标的"
+        lines.append(f'- <a href="{p.url}">**{when}** {names}</a>')
+        detail = [f"{name}：{frag[:40]}" for name, frag in s["lines"]]
+        if s["op"] and not any(s["op"][:16] in d for d in detail):
+            detail.append(s["op"][:50])
+        if not detail:
+            text = p.title or "(无正文)"
+            detail.append((text if len(text) <= 60 else text[:60] + "…")
+                          if not s["op"] else s["op"][:50])
+        for d in dict.fromkeys(detail):
+            lines.append(f"· {d}")
     if len(posts) > limit:
         lines.append(f"> 另有 {len(posts) - limit} 篇，见主页")
     return "\n".join(lines)
