@@ -21,6 +21,14 @@
       "url": "info.pc_jump_url"
     },
     "url_template": "",
+    "detail": {
+      "api_url": "https://t.10jqka.com.cn/lgt/post/open/api/post/detail/get",
+      "slug_regex": "contentId_([0-9a-z]+)",
+      "content_path": "data.postData.content",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+      }
+    },
     "html": {
       "item_selector": "div.post-item",
       "link_selector": "a",

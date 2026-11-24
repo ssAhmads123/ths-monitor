@@ -26,6 +26,7 @@ class Post:
     title: str
     url: str
     ts: float
+    body: str = ""
 
 
 def load_config() -> dict:
@@ -98,9 +99,19 @@ def do_request(cfg: dict):
 
 
 def clean_text(s: str) -> str:
-    """Post bodies arrive as HTML fragments with stock tags; keep readable text only."""
-    s = re.sub(r"<[^>]+>", " ", s or "")
-    return re.sub(r"\s+", " ", unescape(s)).strip()
+    """Post bodies arrive as HTML fragments with stock tags; keep readable text only.
+
+    Line breaks are preserved because the author's posts use <br /> between paragraphs.
+    """
+    s = re.sub(r"<br\s*/?>", "\n", s or "", flags=re.I)
+    s = re.sub(r"</(?:p|div|li|h[1-6]|blockquote|tr)>", "\n", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    lines = []
+    for raw in unescape(s).split("\n"):
+        line = re.sub(r"[ \t\u3000]+", " ", raw).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def fetch_posts_json(cfg: dict) -> list[Post]:
@@ -154,6 +165,25 @@ def fetch_posts_html(cfg: dict) -> list[Post]:
     return [p for p in out if p.pid]
 
 
+def fetch_detail_body(cfg: dict, post: Post) -> str:
+    """The list API caps abstract at 2200 chars; the detail API has the whole post."""
+    d = cfg["fetch"].get("detail") or {}
+    if not d.get("api_url"):
+        return post.title
+    m = re.search(d.get("slug_regex", r"contentId_([0-9a-z]+)"), post.url or "")
+    if not m:
+        return post.title
+    try:
+        resp = requests.get(d["api_url"], params={"contentId": m.group(1)},
+                            headers=d.get("headers", {}), timeout=20)
+        resp.raise_for_status()
+        body = clean_text(str(dig(resp.json(), d.get("content_path", "data.postData.content")) or ""))
+        return body or post.title
+    except Exception as exc:  # noqa: BLE001 - an unreadable detail must not block the alert
+        print(f"detail fetch failed for {post.pid}: {exc!r}", file=sys.stderr)
+        return post.title
+
+
 def fetch_posts(cfg: dict) -> list[Post]:
     mode = cfg["fetch"].get("mode", "json")
     posts = fetch_posts_json(cfg) if mode == "json" else fetch_posts_html(cfg)
@@ -179,10 +209,39 @@ def save_state(seen: list[str]) -> None:
     tmp.replace(STATE_PATH)
 
 
+WECOM_MARKDOWN_LIMIT = 4096
+CHUNK_BYTES = 3200
+
+
+def split_chunks(text: str, limit: int = CHUNK_BYTES) -> list[str]:
+    """WeCom rejects markdown above 4096 bytes, so a long post goes out in parts."""
+    chunks: list[str] = []
+    cur = ""
+    for para in (p for p in text.split("\n") if p.strip()):
+        cand = f"{cur}\n{para}" if cur else para
+        if cur and len(cand.encode("utf-8")) > limit:
+            chunks.append(cur)
+            cur = para
+        else:
+            cur = cand
+        while len(cur.encode("utf-8")) > limit:
+            cut = limit
+            while len(cur[:cut].encode("utf-8")) > limit:
+                cut -= 64
+            chunks.append(cur[:cut])
+            cur = cur[cut:]
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def send_wecom(markdown: str) -> None:
     if not WEBHOOK_KEY:
         raise RuntimeError("WECOM_WEBHOOK_KEY is not set")
-    body = {"msgtype": "markdown", "markdown": {"content": markdown[:4000]}}
+    safe = markdown
+    while len(safe.encode("utf-8")) > WECOM_MARKDOWN_LIMIT - 64:
+        safe = safe[:-64]
+    body = {"msgtype": "markdown", "markdown": {"content": safe}}
     resp = requests.post(
         f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={WEBHOOK_KEY}",
         json=body, timeout=20)
@@ -191,64 +250,34 @@ def send_wecom(markdown: str) -> None:
         raise RuntimeError(f"wecom push failed: {data}")
 
 
+def send_wecom_full(text: str) -> int:
+    chunks = split_chunks(text)
+    for idx, chunk in enumerate(chunks, 1):
+        head = f"**（{idx}/{len(chunks)}）**\n\n" if len(chunks) > 1 else ""
+        send_wecom(head + chunk)
+    return len(chunks)
+
+
 STOCK_TAG = re.compile(r"\$([^$]*?)\((\d{6})\)\$")
-OP_TAG = re.compile(r"(今日操作|收盘总结|竞价|午盘更新)[：:]?\s*([^。]{4,46})")
-SHORT_POST_CHARS = 120
-CLIP_MARKS = "。！？，、；… "
 
 
-def clip(text: str, limit: int) -> str:
-    """Cut at a clause boundary so a trimmed line never ends mid-phrase."""
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    head = text[:limit]
-    cut = max((head.rfind(m) for m in CLIP_MARKS), default=-1)
-    if cut < limit // 2:
-        cut = limit
-    return head[:cut].rstrip("，、；… ") + "…"
-
-
-def summarize(text: str) -> dict:
-    """Pull the mentioned tickers plus the author's own wording about each.
-
-    Verbatim fragments only: keyword-to-signal labelling proved unreliable on this
-    corpus (negations and hypotheticals read backwards), so the reader judges.
-    """
-    stocks = [(code, name) for name, code in STOCK_TAG.findall(text)]
-    lines = []
-    op = ""
-    m = OP_TAG.search(text)
-    if m:
-        op = m.group(0).strip()
-    if len(STOCK_TAG.sub("", text).strip()) <= SHORT_POST_CHARS:
-        for hit in STOCK_TAG.finditer(text):
-            tail = re.split(r"\$", text[hit.end(): hit.end() + 60])[0]
-            tail = re.split(r"[。！]", tail)[0].strip(" ，,、…")
-            if tail:
-                lines.append((hit.group(1) or hit.group(2), tail))
-    return {"stocks": stocks, "lines": lines, "op": op}
+def stock_names(text: str) -> list[str]:
+    """Tickers the author tagged, in mention order; signal is left to the reader."""
+    return list(dict.fromkeys(name or code for name, code in STOCK_TAG.findall(text)))
 
 
 def render(posts: list[Post], limit: int) -> str:
     shown = posts[:limit]
-    lines = [f"**同花顺新帖提醒 · {len(shown)} 篇**"]
+    blocks = []
     for p in shown:
         when = datetime.fromtimestamp(p.ts).strftime("%m-%d %H:%M") if p.ts else ""
-        s = summarize(p.title)
-        names = " · ".join(name for _, name in s["stocks"]) or "无标的"
-        lines.append(f'- **{when}** {names}')
-        detail = [f"{name}：{clip(frag, 40)}" for name, frag in s["lines"]]
-        if s["op"] and not any(s["op"][:16] in d for d in detail):
-            detail.append(clip(s["op"], 50))
-        if not detail:
-            text = p.title or "(无正文)"
-            detail.append(clip(text, 60) if not s["op"] else clip(s["op"], 50))
-        for d in dict.fromkeys(detail):
-            lines.append(f"· {d}")
+        text = p.body or p.title or "(无正文)"
+        names = " · ".join(stock_names(text)) or "无标的"
+        blocks.append(f"**同花顺新帖提醒 · {when} · {names}**\n\n{text}")
+    out = "\n\n".join(blocks)
     if len(posts) > limit:
-        lines.append(f"> 另有 {len(posts) - limit} 篇，见主页")
-    return "\n".join(lines)
+        out += f"\n\n> 另有 {len(posts) - limit} 篇，见主页"
+    return out
 
 
 def main() -> int:
@@ -288,7 +317,10 @@ def main() -> int:
         print(f"cold start: no state cache, notifying {len(fresh)} post(s) inside window")
 
     if fresh:
-        send_wecom(render(fresh, cfg["notify"].get("max_posts_per_message", 8)))
+        limit = cfg["notify"].get("max_posts_per_message", 8)
+        for p in fresh[:limit]:
+            p.body = fetch_detail_body(cfg, p)
+        send_wecom_full(render(fresh, limit))
         print(f"pushed {len(fresh)} new post(s)")
     else:
         print("no new posts")
