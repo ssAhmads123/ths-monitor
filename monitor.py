@@ -194,6 +194,19 @@ def send_wecom(markdown: str) -> None:
 STOCK_TAG = re.compile(r"\$([^$]*?)\((\d{6})\)\$")
 OP_TAG = re.compile(r"(今日操作|收盘总结|竞价|午盘更新)[：:]?\s*([^。]{4,46})")
 SHORT_POST_CHARS = 120
+CLIP_MARKS = "。！？，、；… "
+
+
+def clip(text: str, limit: int) -> str:
+    """Cut at a clause boundary so a trimmed line never ends mid-phrase."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max((head.rfind(m) for m in CLIP_MARKS), default=-1)
+    if cut < limit // 2:
+        cut = limit
+    return head[:cut].rstrip("，、；… ") + "…"
 
 
 def summarize(text: str) -> dict:
@@ -224,13 +237,12 @@ def render(posts: list[Post], limit: int) -> str:
         s = summarize(p.title)
         names = " · ".join(name for _, name in s["stocks"]) or "无标的"
         lines.append(f'- <a href="{p.url}">**{when}** {names}</a>')
-        detail = [f"{name}：{frag[:40]}" for name, frag in s["lines"]]
+        detail = [f"{name}：{clip(frag, 40)}" for name, frag in s["lines"]]
         if s["op"] and not any(s["op"][:16] in d for d in detail):
-            detail.append(s["op"][:50])
+            detail.append(clip(s["op"], 50))
         if not detail:
             text = p.title or "(无正文)"
-            detail.append((text if len(text) <= 60 else text[:60] + "…")
-                          if not s["op"] else s["op"][:50])
+            detail.append(clip(text, 60) if not s["op"] else clip(s["op"], 50))
         for d in dict.fromkeys(detail):
             lines.append(f"· {d}")
     if len(posts) > limit:
