@@ -1,2 +1,3 @@
 requests>=2.31
-beautifulsoup4>=4.12
+# html 兜底模式才需要下面这个；当前 json 接口模式可以注释掉，省一半安装时间
+# beautifulsoup4>=4.12
